@@ -1,0 +1,37 @@
+# ── Large dataset files ───────────────────────────────────────────────────────
+data/
+
+# ── Training runs & checkpoints ───────────────────────────────────────────────
+runs/
+
+# ── Trained weights (large binaries) ─────────────────────────────────────────
+model/weights.pt
+model/weights_int8.pt
+
+# ── MediaPipe model (auto-downloaded) ─────────────────────────────────────────
+*.task
+
+# ── Submission zip ────────────────────────────────────────────────────────────
+*.zip
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ── HuggingFace cache ─────────────────────────────────────────────────────────
+tmp/
+
+# ── Sample outputs (binary images / numpy arrays) ────────────────────────────
+sample_preprocessed_outputs/
