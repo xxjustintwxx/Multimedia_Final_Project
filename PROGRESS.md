@@ -36,13 +36,17 @@ Robust N/A rejection is as important as 5-class accuracy.
 ## Submission Format
 
 ```
-team_X.zip
+team_14.zip
 ├── inference.py          ← must implement predict(crop, landmarks) → int
 ├── model/
-│   └── weights_int8.pt   ← quantized model weights
+│   ├── architecture.py   ← model definition (inference.py imports this)
+│   ├── weights.pt        ← FP32 trained weights (0.142 MB — INT8 not needed)
+│   └── thresholds.json   ← calibrated conf_thresh + margin_thresh
 ├── requirements.txt      ← inference-only dependencies (Colab-compatible)
 └── README.md             ← environment setup and usage notes
 ```
+
+> **Note on INT8:** The model is already 0.142 MB FP32 — well under any size budget. No quantization needed. `inference.py` loads `model/weights.pt` directly.
 
 **Interface contract:**
 ```python
@@ -97,13 +101,14 @@ cropped image (64×64×3)          landmarks (21×2 = 42 floats)
 - `concat(64, 64) → Linear(128→64) → ReLU → Dropout(0.3) → Linear(64→6)`
 - **Target size: ~0.05 MB FP32**
 
-### Total Size Budget
-| Component | FP32 | INT8 (after quantization) |
-|-----------|------|--------------------------|
-| CNN backbone | ~0.3 MB | ~0.08 MB |
-| Landmark MLP | ~0.1 MB | ~0.03 MB |
-| Fusion head | ~0.05 MB | ~0.01 MB |
-| **Total** | **~0.45 MB** | **~0.12 MB** |
+### Total Size Budget (actual measured)
+| Component | Estimate | Actual |
+|-----------|----------|--------|
+| CNN backbone | ~0.3 MB | — |
+| Landmark MLP | ~0.1 MB | — |
+| Fusion head | ~0.05 MB | — |
+| **Total (FP32)** | **~0.45 MB** | **0.142 MB** |
+| Size score | — | **(10 − 0.142) × 3 = 29.57 / 30 pts** |
 
 ---
 
@@ -155,18 +160,18 @@ clip to [0, 1]
 - [x] `train/augment.py` — `RandomHorizontalFlipLM`, `RandomRotationLM`, `RandomBboxJitterLM`, `RandomGaussianBlur`
 - [x] `train/dataset.py` — `GestureDataset` + `balanced_sampler()`
 
-### Step 3 — Phase 1 Training (image branch only)
-- [x] `train/train_phase1.py` — ready to run
+### Step 3 — Phase 1 Training (image branch only) ✅
+- [x] `train/train_phase1.py` — completed (job 217706, run `run_0527_1800`)
 - Train `Phase1Model` (CNN + temporary `Linear(64→6)` head, no landmarks)
 - Loss: standard cross-entropy
 - Balanced `WeightedRandomSampler` — each class equally likely per batch
 - Optimizer: Adam lr=1e-3, CosineAnnealingLR over 20 epochs, batch=256
 - Goal: warm-start CNN so it learns visual features before fusion
 - Saves: `runs/<run-name>/phase1_best.pt`, `phase1_last.pt`, `phase1.log`, `phase1_args.json`
-- [ ] **Job not yet submitted**
+- **Result: best val acc = 86.15% (epoch 20)**
 
-### Step 4 — Phase 2 Training (joint end-to-end)
-- [x] `train/train_phase2.py` — ready to run
+### Step 4 — Phase 2 Training (joint end-to-end) ✅
+- [x] `train/train_phase2.py` — completed (run `run_0527_1800`)
 - Loads Phase 1 CNN weights into `GestureClassifier.image_branch`
 - Trains full dual-stream model (CNN + landmark MLP + fusion head) end-to-end
 - Loss: **weighted cross-entropy** — inverse-frequency weights + 1.5× N/A boost to reflect −2 false trigger cost
@@ -174,7 +179,7 @@ clip to [0, 1]
 - CosineAnnealingLR over 30 epochs, batch=256, `drop_last=True`
 - Saves best checkpoint by **validation contest score** (+1/−2 formula with default gates 0.5/0.2)
 - Saves: `runs/<run-name>/phase2_best.pt`, `phase2_last.pt`, `phase2.log`, `phase2_args.json`
-- [ ] **Job not yet submitted**
+- **Result: best val acc = 96.75%, best val contest score = +11,539 (epoch 28)**
 
 ### Step 5 — Threshold Calibration
 - [x] `train/calibrate.py` — ready to run
@@ -182,7 +187,8 @@ clip to [0, 1]
 - Grid search: `conf_thresh ∈ linspace(0.30, 0.95, 14)` × `margin_thresh ∈ linspace(0.0, 0.5, 11)` = **154 combinations**
 - Scores each pair with exact contest formula: `+1 correct target, −2 false trigger, 0 for N/A prediction`
 - Logs top-10 threshold combinations and saves winner to `model/thresholds.json`
-- [ ] **Run after Phase 2 completes**
+- ⚠️ **`model/thresholds.json` currently contains a stale placeholder (`conf=0.95, margin=0.0`) — must run calibrate.py before packaging**
+- [ ] **Run now**
 
 ### Step 6 — N/A Heuristics ✅
 - [x] Implemented in `inference.py`
@@ -201,7 +207,21 @@ clip to [0, 1]
 - [x] `inference.py` — `predict()` with N/A heuristics, model loaded once at import time
 - [x] `requirements.txt` — torch, torchvision, numpy, Pillow (Colab-compatible)
 - [x] `README.md` — setup and usage
-- [ ] Package as `team_X.zip` after export
+- [ ] Package as `team_14.zip` after export (must include `model/architecture.py`!)
+
+### Packaging Command
+```bash
+cd /work/xxjustin77xx/Multimedia_Final_Project
+zip team_14.zip \
+    inference.py \
+    model/architecture.py \
+    model/weights.pt \
+    model/thresholds.json \
+    requirements.txt \
+    README.md
+# Verify
+unzip -l team_14.zip && du -sh team_14.zip
+```
 
 ---
 
@@ -281,10 +301,11 @@ bash srun_args.sh 1 "python /work/xxjustin77xx/Multimedia_Final_Project/train/ex
 | Step | Job ID | Run name | Status |
 |------|--------|----------|--------|
 | Dataset download + preprocess | 217075 | — | ✅ Done |
-| Phase 1 training | — | — | ⬜ Pending |
-| Phase 2 training | — | — | ⬜ Pending |
-| Threshold calibration | — | — | ⬜ Pending |
-| Export | — | — | ⬜ Pending |
+| Phase 1 training | 217706 | run_0527_1800 | ✅ Done (val acc 86.15%) |
+| Phase 2 training | — | run_0527_1800 | ✅ Done (val score +11,539) |
+| Threshold calibration | — | run_0527_1800 | ⬜ Pending |
+| Export | — | run_0527_1800 | ⬜ Pending |
+| Package team_14.zip | — | — | ⬜ Pending |
 
 ---
 
@@ -295,8 +316,8 @@ bash srun_args.sh 1 "python /work/xxjustin77xx/Multimedia_Final_Project/train/ex
 ---
 
 ## Results Log
-<!-- Add validation scores and submission results here -->
 
-| Date | Checkpoint | Val contest score | Leaderboard score | Notes |
-|------|-----------|-------------------|-------------------|-------|
-| — | — | — | — | — |
+| Date | Checkpoint | Val acc | Val contest score | Leaderboard score | Notes |
+|------|-----------|---------|-------------------|-------------------|-------|
+| 2026-05-27 | run_0527_1800/phase1_best.pt | 86.15% | — | — | Phase 1 (CNN only, no landmarks) |
+| 2026-05-28 | run_0527_1800/phase2_best.pt | 96.75% | +11,539 | — | Phase 2 full dual-stream, epoch 28 |

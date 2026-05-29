@@ -5,8 +5,7 @@ data/
 runs/
 
 # ── Trained weights (large binaries) ─────────────────────────────────────────
-model/weights.pt
-model/weights_int8.pt
+# model/weights.pt is committed (only 173 KB — needed for submission zip)
 
 # ── MediaPipe model (auto-downloaded) ─────────────────────────────────────────
 *.task
