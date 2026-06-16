@@ -14,8 +14,9 @@ import io
 import os
 import sys
 
-# Force HF cache to /work BEFORE any huggingface imports
-_HF_CACHE = "/work/xxjustin77xx/tmp/hf_cache"
+# Force HF cache to a writable location BEFORE any huggingface imports.
+# Override with HF_CACHE_DIR; defaults to the original cluster path.
+_HF_CACHE = os.environ.get("HF_CACHE_DIR", "/work/xxjustin77xx/tmp/hf_cache")
 os.environ["HF_HOME"]           = _HF_CACHE
 os.environ["HF_HUB_CACHE"]      = _HF_CACHE + "/hub"
 os.environ["HF_DATASETS_CACHE"] = _HF_CACHE + "/datasets"
@@ -46,7 +47,10 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 DATASET_ID = "testdummyvt/hagRIDv2_512px"
-OUTPUT_DIR = Path("/work/xxjustin77xx/Multimedia_Final_Project/data")
+# Where preprocessed (crop, landmark) pairs are written. Must match
+# train/dataset.py DATA_ROOT. Override with GESTURE_DATA_ROOT.
+OUTPUT_DIR = Path(os.environ.get(
+    "GESTURE_DATA_ROOT", "/work/xxjustin77xx/Multimedia_Final_Project/data"))
 
 # Two-handed gestures to skip entirely
 TWO_HANDED_LABELS = {5, 6, 7, 8, 23, 30, 33}  # grip, hand_heart*, holy, take_picture, timeout, xsign
@@ -163,8 +167,26 @@ def resume_index(out_split: str) -> set[int]:
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    os.makedirs("/work/xxjustin77xx/tmp/hf_home", exist_ok=True)
-    os.makedirs("/work/xxjustin77xx/tmp/hf_cache", exist_ok=True)
+    os.makedirs(_HF_CACHE, exist_ok=True)
+
+    # Pre-fetch + validate the MediaPipe model ONCE in the parent process.
+    # Otherwise the worker pool races to download the same .task file
+    # concurrently, corrupting it ("Unable to open zip archive"). If a corrupt
+    # file is already present, delete it and re-download.
+    model_path = Path(__file__).with_name("hand_landmarker.task")
+    for attempt in (1, 2):
+        try:
+            _warm = MediaPipeHandPreprocessor()
+            _warm.close()
+            log.info("MediaPipe hand model is present and valid.")
+            break
+        except Exception as e:
+            log.warning(f"MediaPipe model load failed ({e!r}); "
+                        f"re-downloading (attempt {attempt}/2).")
+            if model_path.exists():
+                model_path.unlink()
+            if attempt == 2:
+                raise
 
     num_workers = max(1, min(mp.cpu_count() - 1, 11))
     log.info(f"Using {num_workers} worker processes")

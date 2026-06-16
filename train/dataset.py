@@ -17,7 +17,10 @@ from augment import (
     RandomRotationLM, RandomBboxJitterLM, RandomGaussianBlur,
 )
 
-DATA_ROOT = Path("/work/xxjustin77xx/Multimedia_Final_Project/data")
+# Root of preprocessed data (crops/<split>/<label>/, landmarks/<split>/<label>/).
+# Must match download_and_preprocess.py OUTPUT_DIR. Override with GESTURE_DATA_ROOT.
+DATA_ROOT = Path(os.environ.get(
+    "GESTURE_DATA_ROOT", "/work/xxjustin77xx/Multimedia_Final_Project/data"))
 IMG_SIZE  = 64
 MEAN = (0.5, 0.5, 0.5)
 STD  = (0.5, 0.5, 0.5)

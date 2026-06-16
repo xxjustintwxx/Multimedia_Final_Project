@@ -7,7 +7,15 @@
 \setmainfont{Latin Modern Roman}
 \setsansfont{Latin Modern Sans}
 \setmonofont{Latin Modern Mono}
-\newfontfamily\zhfont{Microsoft JhengHei}
+% Use Microsoft JhengHei when available (Windows). Otherwise fall back to a CJK
+% font that is present and embeddable on Linux. Note: Noto's variable-font .ttc
+% releases break xdvipdfmx ("Invalid TTC index number"), so prefer the plain
+% Droid Sans Fallback TTF, with Noto Sans CJK TC only as a last resort.
+\IfFontExistsTF{Microsoft JhengHei}
+  {\newfontfamily\zhfont{Microsoft JhengHei}}
+  {\IfFontExistsTF{Droid Sans Fallback}
+    {\newfontfamily\zhfont{Droid Sans Fallback}}
+    {\newfontfamily\zhfont{Noto Sans CJK TC}}}
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{array}
@@ -20,8 +28,10 @@
 \usepackage{fancyhdr}
 \usepackage{caption}
 \usepackage{subcaption}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc}
 \usepackage{flafter}
-\usepackage[section]{placeins}
+\usepackage{placeins}
 
 \setlength{\parindent}{1em}
 \setlength{\parskip}{0pt}
@@ -128,7 +138,7 @@ flattened into a \result{42}{INFER}-dimensional vector. The output mapping is
 shown in Table~\ref{tab:classes}. Full-frame images are prohibited
 ~\cite{courseSpec}.
 
-\begin{table}[t]
+\begin{table}[!b]
   \centering
   \caption{Output label mapping used by the submitted inference code.}
   \label{tab:classes}
@@ -190,19 +200,57 @@ use a gesture-recognition pretrained model.
 
 \begin{figure*}[t]
   \centering
-  \modelbox{\textbf{Inputs}\\
-    $64{\times}64{\times}3$ RGB crop\\
-    $21{\times}2$ landmarks}
-  \hspace{0.012\textwidth}$\Longrightarrow$\hspace{0.012\textwidth}
-  \modelbox{\textbf{Parallel encoders}\\
-    5-block DW-separable CNN\\
-    MLP: $42{\to}128{\to}64$}
-  \hspace{0.012\textwidth}$\Longrightarrow$\hspace{0.012\textwidth}
-  \modelbox{\textbf{Fusion and decision}\\
-    concat $128{\to}64{\to}6$\\
-    softmax + N/A gates}
-  \caption{Overview of the dual-stream classifier. The image and landmark
-  encoders each produce a 64-dimensional feature before concatenation.}
+  \resizebox{\textwidth}{!}{%
+  \begin{tikzpicture}[
+      >=Stealth,
+      node distance=8mm and 11mm,
+      io/.style   ={rounded corners=2pt, draw=black!45, fill=white,
+                    align=center, inner sep=4pt, minimum height=10mm,
+                    text width=21mm},
+      enc/.style  ={rounded corners=2pt, draw=linkblue!75, fill=boxgray,
+                    align=center, inner sep=5pt, minimum height=13mm,
+                    text width=24mm},
+      op/.style   ={rounded corners=2pt, draw=linkblue!75, fill=boxgray,
+                    align=center, inner sep=5pt, minimum height=13mm,
+                    text width=22mm},
+      dec/.style  ={rounded corners=2pt, draw=linkblue!75, fill=linkblue!12,
+                    align=center, inner sep=5pt, minimum height=13mm,
+                    text width=22mm},
+      arr/.style  ={->, thick, draw=black!65},
+      lbl/.style  ={font=\scriptsize, text=black!70, inner sep=2pt}
+    ]
+    % --- inputs ---
+    \node[io] (img) {RGB crop\\$64{\times}64{\times}3$};
+    \node[io, below=9mm of img] (lm) {Landmarks\\$21{\times}2$};
+    % --- encoders ---
+    \node[enc, right=of img] (cnn)
+      {\textbf{Image encoder}\\5-block\\DW-separable CNN};
+    \node[enc, right=of lm] (mlp)
+      {\textbf{Landmark encoder}\\MLP\\$42{\to}128{\to}64$};
+    % --- fusion / decision chain (centred between the two encoders) ---
+    \path (cnn.east) -- (mlp.east) coordinate[midway] (mid);
+    \node[op,  right=14mm of mid] (cat)
+      {\textbf{Concat}\\$[\mathbf{f}_I;\mathbf{f}_L]\in\mathbb{R}^{128}$};
+    \node[op,  right=of cat] (fuse) {\textbf{Fusion head}\\$128{\to}64{\to}6$};
+    \node[dec, right=of fuse] (dec) {\textbf{Decision}\\softmax\\$+$ N/A gates};
+    \node[io,  right=of dec, text width=24mm] (out)
+      {Class $\in\{$N/A, fist,\\like, OK, one, palm$\}$};
+    % --- arrows ---
+    \draw[arr] (img) -- (cnn);
+    \draw[arr] (lm)  -- (mlp);
+    \draw[arr] (cnn.east) to[out=0,in=160]
+      node[lbl, above, pos=0.55]{$\mathbf{f}_I\!\in\!\mathbb{R}^{64}$} (cat.west);
+    \draw[arr] (mlp.east) to[out=0,in=200]
+      node[lbl, below, pos=0.55]{$\mathbf{f}_L\!\in\!\mathbb{R}^{64}$} (cat.west);
+    \draw[arr] (cat)  -- (fuse);
+    \draw[arr] (fuse) -- (dec);
+    \draw[arr] (dec)  -- (out);
+  \end{tikzpicture}}
+  \caption{Overview of the dual-stream classifier. A MediaPipe-cropped RGB hand
+  image and 21 crop-relative landmarks are encoded by two independent branches,
+  each producing a 64-dimensional descriptor. The descriptors are concatenated
+  into a 128-dimensional multimodal feature, mapped to six logits by the fusion
+  head, and converted to a final label by the softmax and N/A-rejection gates.}
   \label{fig:architecture}
 \end{figure*}
 
@@ -224,6 +272,47 @@ information across channels and changes the channel count. Each operation is
 followed by batch normalization and ReLU
 ~\cite{ioffe2015batchnorm}. This factorization replaces a dense spatial
 convolution while preserving its local receptive field.
+
+A central design decision keeps the model far smaller than typical
+submissions: we reuse only the depthwise-separable \emph{building block}
+introduced by MobileNet~\cite{howard2017mobilenets}, rather than an entire
+MobileNet backbone. A complete MobileNetV2 or MobileNetV3 image encoder holds
+on the order of millions of parameters---roughly 3.4\,M and 2.5\,M for
+MobileNetV2 and MobileNetV3-Small, respectively---and
+is usually deployed by fine-tuning ImageNet-pretrained
+weights~\cite{sandler2018mobilenetv2,howard2019mobilenetv3}. In contrast, our
+image encoder stacks only five such blocks and is trained from scratch on the
+gesture data (Section~\ref{sec:training}), so it contains just
+\result{13{,}249}{VERIFY} parameters---about two orders of magnitude fewer than
+a full backbone, as summarized in Table~\ref{tab:size-compare}. Two factors
+make this reduced capacity sufficient: the hand crop is already tightly
+localized by the fixed MediaPipe stage, and only six coarse classes must be
+separated. This choice, rather than post-hoc compression, is the primary reason
+the complete network occupies under 0.2~MiB instead of the several megabytes
+typical of a fine-tuned backbone, which directly raises the size component of
+the official score.
+
+\begin{table}[t]
+  \centering
+  \caption{Parameter-count comparison between our from-scratch image encoder
+  and standard MobileNet image backbones. MobileNet counts are the published
+  ImageNet encoder sizes~\cite{sandler2018mobilenetv2,howard2019mobilenetv3};
+  ours are recomputed from the model definition\evidence{VERIFY}.}
+  \label{tab:size-compare}
+  \small
+  \setlength{\tabcolsep}{5pt}
+  \begin{tabular}{lr}
+    \toprule
+    Image encoder & Parameters \\
+    \midrule
+    MobileNetV2 (full backbone)        & $\sim$3{,}400{,}000 \\
+    MobileNetV3-Small (full backbone)  & $\sim$2{,}500{,}000 \\
+    \textbf{Ours} (5 DW-sep blocks, from scratch) & \textbf{13{,}249} \\
+    \midrule
+    \textbf{Ours} (full dual-stream model)        & \textbf{36{,}039} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 Table~\ref{tab:image-branch} gives the complete tensor progression. The first
 three blocks use stride two and reduce the spatial resolution from
@@ -252,6 +341,14 @@ yielding one scalar per channel and therefore a
     \bottomrule
   \end{tabular}
 \end{table}
+
+The branch is also inexpensive to evaluate. Summing the multiply--accumulate
+operations of every layer in Table~\ref{tab:image-branch} gives
+\result{$\approx$1.0\,M}{VERIFY} MACs (about 2.0\,MFLOPs) for one forward pass,
+of which the image branch accounts for \result{98\%}{VERIFY}; the landmark and
+fusion paths together contribute only about 22\,k MACs. The model is therefore
+cheap to run per frame in addition to being small to store, which matters for
+the edge setting where compute, not just disk size, is constrained.
 
 \subsection{Landmark branch and fusion}
 
@@ -292,9 +389,58 @@ p_1 < \tau_c \quad \text{or} \quad p_1-p_2 < \tau_m .
 Calibration selected $\tau_c=\result{0.95}{CAL}$ and
 $\tau_m=\result{0.00}{CAL}$. Therefore, the final deployed sequence is:
 landmark validity check, six-class neural prediction, direct neural N/A
-decision, and finally the 0.95 confidence gate. The margin condition remains
+decision, and finally the 0.95 confidence gate, as shown in
+Figure~\ref{fig:na-flow}. The margin condition remains
 implemented for reproducibility and future recalibration, but a zero threshold
 means it does not reject additional samples in the submitted configuration.
+
+\begin{figure}[t]
+  \centering
+  \resizebox{0.95\columnwidth}{!}{%
+  \begin{tikzpicture}[
+      >=Stealth, node distance=6mm,
+      proc/.style={rounded corners=2pt, draw=linkblue!75, fill=boxgray,
+                   align=center, inner sep=4pt, text width=44mm,
+                   minimum height=8mm},
+      test/.style={rounded corners=2pt, draw=linkblue!75, fill=white,
+                   align=center, inner sep=4pt, text width=44mm,
+                   minimum height=8mm},
+      na/.style={rounded corners=2pt, draw=red!55, fill=red!8,
+                 align=center, inner sep=4pt, text width=14mm,
+                 minimum height=9mm},
+      term/.style={rounded corners=2pt, draw=linkblue!75, fill=linkblue!12,
+                  align=center, inner sep=4pt, text width=44mm,
+                  minimum height=8mm},
+      arr/.style={->, thick, draw=black!65},
+      yes/.style={font=\scriptsize, text=red!55!black},
+      no/.style={font=\scriptsize, text=black!70}
+    ]
+    \node[proc] (in) {Input: RGB crop $+$ 21 landmarks};
+    \node[test, below=of in]  (g1)  {landmark span $<0.05$?};
+    \node[proc, below=of g1]  (net) {dual-stream forward $+$ softmax};
+    \node[test, below=of net] (g2)  {$\arg\max=$ N/A (class 0)?};
+    \node[test, below=of g2]  (g3)  {$p_1<\tau_c$ \textbf{or}
+                                     $p_1{-}p_2<\tau_m$?\\
+                                     {\scriptsize($\tau_c{=}0.95,\ \tau_m{=}0.00$)}};
+    \node[term, below=of g3]  (out) {Output gesture $\in\{1,\dots,5\}$};
+    \node[na, right=20mm of g2] (na) {return\\\textbf{N/A}};
+    % pass (no) path down the centre
+    \draw[arr] (in) -- (g1);
+    \draw[arr] (g1)  -- node[no,left]{no} (net);
+    \draw[arr] (net) -- (g2);
+    \draw[arr] (g2)  -- node[no,left]{no} (g3);
+    \draw[arr] (g3)  -- node[no,left]{no} (out);
+    % reject (yes) paths to the N/A sink
+    \draw[arr] (g1.east) -| node[yes,pos=0.25,above]{yes} (na.north);
+    \draw[arr] (g2.east) -- node[yes,above]{yes} (na.west);
+    \draw[arr] (g3.east) -| node[yes,pos=0.25,below]{yes} (na.south);
+  \end{tikzpicture}}
+  \caption{Deployed N/A-rejection decision flow~\evidence{INFER}. A sample is
+  rejected as N/A if the landmarks collapse, if the network's top class is N/A,
+  or if it fails the confidence gate; otherwise the predicted gesture is
+  returned. The margin term is inactive at $\tau_m{=}0.00$.}
+  \label{fig:na-flow}
+\end{figure}
 
 \section{Dataset and Preprocessing}
 \label{sec:data}
@@ -331,6 +477,19 @@ x_c=\frac{xW-l}{r-l}, \qquad y_c=\frac{yH-t}{b-t}.
 Images for which MediaPipe detects no hand are discarded. For each accepted
 sample, the pipeline stores the crop as JPEG and the $21\times2$ landmark
 array as a NumPy file; the original full-frame image is not retained.
+Figure~\ref{fig:sample-inputs} shows representative preprocessed samples with
+their landmarks overlaid, illustrating the two modalities the classifier
+receives.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/sample_inputs.png}
+  \caption{Representative preprocessed inputs. Each panel shows a
+  MediaPipe-cropped RGB hand (the image-branch input) with its 21 crop-relative
+  landmarks overlaid as the MediaPipe skeleton (the landmark-branch input).
+  Examples are drawn from \texttt{sample\_preprocessed\_outputs/}\evidence{DATA}.}
+  \label{fig:sample-inputs}
+\end{figure}
 
 \begin{table}[t]
   \centering
@@ -477,6 +636,114 @@ reached the maximum reported basic-performance score, but the lower robustness
 score suggests that model selection must account for real-world N/A examples
 rather than relying only on the HaGRIDv2-derived test set.
 
+\subsection{Baseline comparison: the N/A training distribution}
+\label{sec:baseline}
+
+To isolate how the N/A class should be constructed, we compare the submitted
+model against an earlier team baseline\evidence{BASE} that shares the same
+dual-stream concept---a CNN image branch, a landmark MLP, and a fused
+classifier---but differs in two respects. First and most importantly, the
+baseline draws its N/A training data from only five specific HaGRIDv2
+categories (\texttt{dislike}, \texttt{peace}, \texttt{stop}, \texttt{call},
+and \texttt{no\_gesture}), each capped at \result{4{,}000}{BASE} images,
+whereas the submitted model treats \emph{every} retained non-command one-hand
+category as N/A (about 487k training samples; Section~\ref{sec:data}). Second,
+the baseline uses plain $3\times3$ convolutions on a $128\times128$ crop with a
+single \result{0.60}{BASE} confidence threshold for rejection, instead of the
+depthwise-separable blocks and multi-stage rejection of
+Section~\ref{sec:method}.
+
+\begin{table}[t]
+  \centering
+  \caption{Effect of the N/A training distribution. Both models use the same
+  dual-stream concept and the official $+1/-2$ scoring; they differ mainly in
+  how the N/A class is built. Submitted scores are from the
+  presentation\evidence{PRES}; the baseline model and its scores are the team's
+  earlier run\evidence{BASE}.}
+  \label{tab:baseline}
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}lp{0.34\columnwidth}rr@{}}
+    \toprule
+    Model & N/A training data & Basic\,/20 & Robust.\,/40 \\
+    \midrule
+    Submitted & all non-command one-hand poses ($\approx$487k)
+              & \textbf{19.4} & \textbf{32.5} \\
+    Baseline  & 5 categories, $\le$4k each ($\le$20k)
+              & 7.6 & 5.0 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Table~\ref{tab:baseline} reports both models under the official rule. The
+narrow-N/A baseline scores only 7.6/20 on basic performance and 5.0/40 on
+robustness, against 19.4 and 32.5 for the submitted model. The robustness gap
+is the most telling: a classifier exposed to only five N/A gesture types in
+training has no representation of the broad space of everyday hand poses in the
+TA-shot interference set, so it false-triggers frequently---and under the
+$+1/-2$ rule each false trigger is doubly costly. The two models also differ
+architecturally, so this is a baseline comparison rather than a single-variable
+ablation; nonetheless, the dominant cause of the gap is the N/A distribution.
+Defining N/A as the full diversity of non-command poses, rather than a handful
+of curated categories, is what makes the rejection behavior generalize to
+real-world inputs, and it is the main reason the submitted model is
+substantially more robust.
+
+\subsection{Modality ablation}
+\label{sec:modality}
+
+To quantify each input stream's contribution, we trained a landmark-only
+variant---the landmark branch followed by the same six-way head, with no image
+branch---under the same Phase-2 training protocol\evidence{ABL}.
+Table~\ref{tab:modality} places it beside the image-only Phase-1 model and the
+full fusion model.
+
+\begin{table}[t]
+  \centering
+  \caption{Modality ablation (best validation accuracy). Image-only and fusion
+  are the original Phase-1/Phase-2 runs\evidence{PROG}; landmark-only is a
+  dedicated run on a freshly re-preprocessed copy of the dataset under the same
+  protocol\evidence{ABL}. The two data builds are not identical, so the
+  landmark-only vs.\ fusion difference should be read as approximate.}
+  \label{tab:modality}
+  \small
+  \setlength{\tabcolsep}{6pt}
+  \begin{tabular}{lrr}
+    \toprule
+    Configuration & Params & Val.\ accuracy \\
+    \midrule
+    Image-only (Phase 1)        & 13{,}639 & 86.15\% \\
+    Landmark-only               & 18{,}694 & 96.60\% \\
+    Fusion (image $+$ landmark) & 36{,}039 & \textbf{96.75\%} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The landmark-only model reaches \result{96.60\%}{ABL} validation accuracy with
+only 18{,}694 parameters---close to the full fusion model
+(\result{96.75\%}{PROG}) and far above the image-only model
+(\result{86.15\%}{PROG}). Hand geometry therefore carries most of the
+discriminative signal for these six classes on clean validation data. This
+ablation was run only after the fusion model had been finalized and submitted,
+on a freshly re-preprocessed copy of the dataset; the image-only and fusion
+figures are from the original build, so the small landmark-only vs.\ fusion
+accuracy gap should not be over-interpreted, although the large margin over
+image-only is robust to that difference.
+
+We nonetheless keep the image branch in the submitted model, for robustness
+rather than clean-set accuracy. The landmark stream depends entirely on
+MediaPipe's landmark estimates; when those degrade or fail---through occlusion,
+motion blur, unusual viewpoints, or detection errors that are common in
+real-world capture---a landmark-only classifier has no fallback, whereas the
+image branch supplies an independent appearance-based signal that can still
+yield a correct prediction. This is consistent with the evidence we do have:
+the full model's best validation contest score
+(\result{$+$11{,}539}{PROG}, default gates) exceeds the landmark-only model's
+(\result{$+$11{,}233}{ABL}) by more than the small accuracy gap suggests,
+indicating the image branch already helps on borderline cases under the
+asymmetric scoring. A controlled real-world comparison of the two would
+quantify this robustness benefit directly and remains future work.
+
 \section{Discussion and Limitations}
 \label{sec:discussion}
 
@@ -485,8 +752,12 @@ is sufficient for a high challenge score: the submission uses less than
 0.2 MiB of serialized weights while retaining strong target-set performance.
 Second, calibration matters because the evaluation heavily penalizes false
 activation. The selected threshold of 0.95 deliberately trades recall for
-precision. Third, the gap between basic and robustness scores indicates a
-remaining domain shift between HaGRIDv2 imagery and TA-shot daily-action
+precision. Third, the baseline comparison in Section~\ref{sec:baseline} shows
+that the N/A training distribution, not the network capacity, dominates
+real-world robustness: replacing a few curated N/A categories with the full
+diversity of non-command poses raises the robustness score from 5.0 to 32.5.
+The remaining gap between basic and robustness scores still indicates a
+residual domain shift between HaGRIDv2 imagery and TA-shot daily-action
 examples.
 
 The available evidence also has limitations. The repository contains the
@@ -495,8 +766,11 @@ the original Phase-1/Phase-2 logs or per-example leaderboard predictions.
 Consequently, the validation accuracies are traceable to the project progress
 record, while the leaderboard table is traceable to the team presentation;
 neither was independently recomputed in this report.
-The project also did not preserve image-only and landmark-only ablation runs,
-so the separate contribution of each modality cannot be quantified. Finally,
+The modality ablation (Section~\ref{sec:modality}) shows that the landmark
+stream alone nearly matches the full model, but image-only and landmark-only
+were measured on slightly different data builds; a fully controlled
+single-build ablation of all three configurations remains future work.
+Finally,
 latency and energy consumption were not measured on a specified edge device;
 small model size alone does not establish real-time performance on every
 deployment target.
@@ -545,12 +819,28 @@ the presentation PDF and a verification script for model statistics.
       & Grid-search scores and selected calibration point. \\
     \phantomsection\label{ev:VERIFY}VERIFY
       & \texttt{evidence/verify\_report\_numbers.py};
+        \texttt{evidence/compute\_flops.py};
         \codepath{model/architecture.py}; \codepath{model/weights.pt}
-      & Parameter count, tensor footprint, checkpoint size, and computed size score. \\
+      & Parameter count, per-branch parameters, tensor footprint, checkpoint
+        size, computed size score, and the MAC/FLOP inference cost. \\
     \phantomsection\label{ev:DATA}DATA
       & \codepath{download_and_preprocess.py};
-        \codepath{hand_preprocess.py}
-      & Dataset source, label mapping, exclusion policy, and preprocessing. \\
+        \codepath{hand_preprocess.py};
+        \texttt{figures/make\_sample\_inputs.py};
+        \texttt{sample\_preprocessed\_outputs/}
+      & Dataset source, label mapping, exclusion policy, preprocessing, and the
+        rendered sample-input figure. \\
+    \phantomsection\label{ev:BASE}BASE
+      & \texttt{evidence/baseline/}: \texttt{download\_dataset.sh},
+        \texttt{subsample\_dataset.py}, \texttt{baseline\_inference.py}
+      & Baseline N/A category selection, the 4{,}000-per-class cap, baseline
+        architecture and 0.60 threshold, and its leaderboard scores
+        (team-reported; raw export not committed). \\
+    \phantomsection\label{ev:ABL}ABL
+      & \codepath{train/ablation_landmark_only.py}
+      & Landmark-only ablation: model definition, parameter count, and its best
+        validation accuracy and contest score (run on a re-preprocessed copy of
+        the dataset under the Phase-2 protocol). \\
     \phantomsection\label{ev:PROG}PROG
       & \codepath{PROGRESS.md}
       & Recorded Phase-1 and Phase-2 validation accuracies and the selected
@@ -598,20 +888,20 @@ specification, figures, and verification helper used to support its claims.
 
 \begin{table}[h!]
   \centering
-  \caption{Team member contribution statement. Complete the student IDs and
-  concrete deliverables before submission.}
+  \caption{Team member contribution statement.}
   \label{tab:contributions}
   \small
   \begin{tabular}{p{0.16\textwidth}p{0.16\textwidth}p{0.60\textwidth}}
     \toprule
     Member & Student ID & Specific contributions \\
     \midrule
-    {\zhfont 王昱閔} & [ID]
-      & [Specify data, implementation, experiments, writing, and presentation work.] \\
-    {\zhfont 王辰竹} & [ID]
-      & [Specify data, implementation, experiments, writing, and presentation work.] \\
-    {\zhfont 羅詠璿} & [ID]
-      & [Specify data, implementation, experiments, writing, and presentation work.] \\
+    {\zhfont 王昱閔} & 112062114
+      & Model architecture design; model training and hyperparameter tuning;
+        presentation; report writing. \\
+    {\zhfont 王辰竹} & 112062105
+      & Hyperparameter tuning; presentation. \\
+    {\zhfont 羅詠璿} & 112060002
+      & Baseline model training; real-time demo; report writing. \\
     \bottomrule
   \end{tabular}
 \end{table}

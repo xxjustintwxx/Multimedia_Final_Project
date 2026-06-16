@@ -1,0 +1,16 @@
+# Dependencies for the FULL training/ablation pipeline (download + preprocess +
+# train). The submission's requirements.txt is inference-only; this superset
+# additionally covers MediaPipe preprocessing and HaGRIDv2 download.
+#
+#   pip install -r requirements-train.txt
+
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+Pillow>=9.0.0
+
+# Preprocessing (download_and_preprocess.py + hand_preprocess.py)
+mediapipe>=0.10.9
+huggingface_hub>=0.20.0
+pandas>=2.0.0
+pyarrow>=14.0.0
